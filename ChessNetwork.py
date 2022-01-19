@@ -5,8 +5,8 @@ import numpy as np
 
 def build_model():
     model = tf.keras.Sequential([
-        tf.keras.layers.Flatten(input_shape=(2, 2)),
-        tf.keras.layers.Dense(5, activation='relu'),
+        tf.keras.layers.Flatten(input_shape=(8, 8)),
+        tf.keras.layers.Dense(128, activation='relu'),
         tf.keras.layers.Dense(2, activation='sigmoid')
     ])
     return model
@@ -15,7 +15,7 @@ def build_model():
 class ChessNetwork:
     def __init__(self):
         self.move = None
-        self.model = None
+        self.model = build_model()
         self.input = []
 
     def predict_move(self):
@@ -36,3 +36,9 @@ class ChessNetwork:
                 if not piece.color:
                     p = p * -1
             self.input.append(p)
+
+    def build_from_genome(self, individual: list):
+        i = 0
+        for layer in self.model.layers[1:]:
+            layer.set_weights(individual[i])
+            i += i

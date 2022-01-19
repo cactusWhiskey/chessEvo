@@ -1,56 +1,66 @@
-import copy
 import random
 import matplotlib.pyplot as plt
 import numpy
 from deap import base
 from deap import creator
 from deap import tools
-
 import ChessNetwork
 
-POP_SIZE, CX, MUT, T_SIZE, NGEN = 100, 0.5, 0.2, 3, 50
+CX, MUT = 0.5, 0.2
+POP_SIZE, T_SIZE, NGEN = 100, 3, 50
+MUT_LAYER_PROB = 0.1
 
 
-def cxUniformShallow(ind1, ind2, indpb, layer_prob):
+def cxUniformShallow(ind1, ind2, layer_prob):
     """Executes a uniform crossover that modify in place the two
     :term:`sequence` individuals. The attributes are swapped according to the
     *indpb* probability.
     :param ind1: The first individual participating in the crossover.
     :param ind2: The second individual participating in the crossover.
-    :param indpb: Independent probability for each attribute to be exchanged within a layer.
     :param layer_prob: Probability of crossover happening on a given layer
     :returns: A tuple of two individuals.
     This function uses the :func:`~random.random` function from the python base
     :mod:`random` module.
     """
-    size = min(len(ind1), len(ind2))
-    for i in range(size):  # iterate through list of layer weights
+    num_layers = min(len(ind1), len(ind2))
+    for i in range(num_layers):  # iterate through list of layer weights
         if random.random() < layer_prob:  # select this layer
             # Note: ind[i] is a list of ndarrays
-            ind1[i], ind2[i] = ind2[i], ind1[i]
+            ind1[i], ind2[i] = ind2[i], ind1[i]  # just swap lists of layer matrices wholesale
 
     return ind1, ind2
 
 
-def cxUniformDeep(ind1, ind2, indpb, layer_prob):
-    """Executes a uniform crossover that modify in place the two
-    :term:`sequence` individuals. The attributes are swapped according to the
-    *indpb* probability.
-    :param ind1: The first individual participating in the crossover.
-    :param ind2: The second individual participating in the crossover.
-    :param indpb: Independent probability for each attribute to be exchanged within a layer.
-    :param layer_prob: Probability of crossover happening on a given layer
-    :returns: A tuple of two individuals.
-    This function uses the :func:`~random.random` function from the python base
-    :mod:`random` module.
-    """
-    size = min(len(ind1), len(ind2))
-    for i in range(size):  # iterate through list of layer weights
-        if random.random() < layer_prob:  # select this layer
-            # Note: ind[i] is a list of ndarrays
-            ind1[i], ind2[i] = ind2[i], ind1[i]
-
-    return ind1, ind2
+# def cxUniformDeep(ind1, ind2, indpb, layer_prob):
+#     """Executes a uniform crossover that modify in place the two
+#     :term:`sequence` individuals. The attributes are swapped according to the
+#     *indpb* probability.
+#     :param ind1: The first individual participating in the crossover.
+#     :param ind2: The second individual participating in the crossover.
+#     :param indpb: Independent probability for each attribute to be exchanged within a layer.
+#     :param layer_prob: Probability of crossover happening on a given layer
+#     :returns: A tuple of two individuals.
+#     This function uses the :func:`~random.random` function from the python base
+#     :mod:`random` module.
+#     """
+#     numLayers = min(len(ind1), len(ind2))
+#
+#     for i in range(numLayers):  # iterate through list of layer weights
+#         if random.random() < layer_prob:  # select this layer
+#             # Note: ind[i] is a list of ndarrays
+#
+#             matricesInLayer = min(len(ind1[i]), len(ind2[i]))
+#             for j in range(matricesInLayer):
+#                 # Note ind[i][j] is a single ndarray
+#
+#                 r,c = ind1[i][j].shape
+#                 for row in r:
+#                     for col in c:
+#                         ind1[i][j][row,col] , ind2[i][j][row,col] = ind2[i][j][row,col] , ind1[i][j][row,col] =
+#
+#
+#
+#     return ind1, ind2
 
 
 def setup_creator():
@@ -67,21 +77,19 @@ def build_individual():
 
 def build_individual1():
     model = ChessNetwork.build_model()
-
-    weights = []
-    for layer in model.layers[1:]:
-        weights.append(layer.get_weights())
-
     ind = creator.Individual()
-    ind.append(weights)
-
+    for layer in model.layers[1:]:
+        ind.append(layer.get_weights())
     return ind
+
+def evaluate2(individual):
 
 
 def evaluate(individual):
     total = 0.0
-    for x in range(len(individual)):
-        total += sum(individual[x])
+    for i in range(len(individual)):
+        for j in range(len(individual[i])):
+            total += numpy.sum(individual[i][j])
     return total,
 
 
@@ -104,8 +112,9 @@ class EvolutionWorker:
         self.toolbox.register("individual", build_individual1)
         self.toolbox.register("population", tools.initRepeat, list, self.toolbox.individual)
         self.toolbox.register("evaluate", evaluate)
-        self.toolbox.register("mate", tools.cxTwoPoint)
+        self.toolbox.register("mate", cxUniformShallow, layer_prob=0.1)
         self.toolbox.register("mutate", tools.mutGaussian, mu=0, sigma=1, indpb=0.1)
+        self.toolbox.register("mutate_wrapper", self.mutate_wrapper)
         self.toolbox.register("select", tools.selTournament, tournsize=T_SIZE)
 
     def setup_pop(self):
@@ -151,7 +160,7 @@ class EvolutionWorker:
 
             for mutant in offspring:
                 if random.random() < MUT:
-                    self.mutate_wrapper(mutant)
+                    self.toolbox.mutate_wrapper(mutant)
                     # self.toolbox.mutate(mutant)
                     # del mutant.fitness.values
 
@@ -170,11 +179,23 @@ class EvolutionWorker:
         print("-- End of (successful) evolution --")
 
         best_ind = tools.selBest(self.pop, 1)[0]
-        print("Best individual is %s, %s" % (best_ind, best_ind.fitness.values))
-        print(str((self.pop[0])[0]))
+        print("Best individual is %s" % best_ind.fitness.values)
+
         self.plot()
 
     def mutate_wrapper(self, mutant):
-        for x in range(len(mutant)):
-            self.toolbox.mutate(mutant[x])
-            del mutant.fitness.values
+        for i in range(len(mutant)):
+            if random.random() < MUT_LAYER_PROB:
+                # mutate this layer's matrices
+                # mutant[i] is a list of ndarrays
+                num_matrices = len(mutant[i])
+                for j in range(num_matrices):
+                    matrix = mutant[i][j]  # type: numpy.ndarray
+                    shape = matrix.shape
+                    matrix = matrix.flatten()
+                    self.toolbox.mutate(matrix)
+                    matrix.reshape(shape)
+                    mutant[i][j] = matrix
+
+        del mutant.fitness.values
+        return mutant
