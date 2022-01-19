@@ -3,18 +3,20 @@ import tensorflow as tf
 import numpy as np
 
 
+def build_model():
+    model = tf.keras.Sequential([
+        tf.keras.layers.Flatten(input_shape=(2, 2)),
+        tf.keras.layers.Dense(5, activation='relu'),
+        tf.keras.layers.Dense(2, activation='sigmoid')
+    ])
+    return model
+
+
 class ChessNetwork:
     def __init__(self):
         self.move = None
         self.model = None
         self.input = []
-
-    def build_model(self):
-        self.model = tf.keras.Sequential([
-            tf.keras.layers.Flatten(input_shape=(8, 8)),
-            tf.keras.layers.Dense(128, activation='relu'),
-            tf.keras.layers.Dense(2, activation='sigmoid')
-        ])
 
     def predict_move(self):
         output = self.model.predict(self.input)  # ndarray shape (1,2)

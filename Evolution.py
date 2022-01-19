@@ -1,3 +1,4 @@
+import copy
 import random
 import matplotlib.pyplot as plt
 import numpy
@@ -5,16 +6,83 @@ from deap import base
 from deap import creator
 from deap import tools
 
+import ChessNetwork
+
 POP_SIZE, CX, MUT, T_SIZE, NGEN = 100, 0.5, 0.2, 3, 50
 
 
-def evaluate(individual):
-    return sum(individual),
+def cxUniformShallow(ind1, ind2, indpb, layer_prob):
+    """Executes a uniform crossover that modify in place the two
+    :term:`sequence` individuals. The attributes are swapped according to the
+    *indpb* probability.
+    :param ind1: The first individual participating in the crossover.
+    :param ind2: The second individual participating in the crossover.
+    :param indpb: Independent probability for each attribute to be exchanged within a layer.
+    :param layer_prob: Probability of crossover happening on a given layer
+    :returns: A tuple of two individuals.
+    This function uses the :func:`~random.random` function from the python base
+    :mod:`random` module.
+    """
+    size = min(len(ind1), len(ind2))
+    for i in range(size):  # iterate through list of layer weights
+        if random.random() < layer_prob:  # select this layer
+            # Note: ind[i] is a list of ndarrays
+            ind1[i], ind2[i] = ind2[i], ind1[i]
+
+    return ind1, ind2
+
+
+def cxUniformDeep(ind1, ind2, indpb, layer_prob):
+    """Executes a uniform crossover that modify in place the two
+    :term:`sequence` individuals. The attributes are swapped according to the
+    *indpb* probability.
+    :param ind1: The first individual participating in the crossover.
+    :param ind2: The second individual participating in the crossover.
+    :param indpb: Independent probability for each attribute to be exchanged within a layer.
+    :param layer_prob: Probability of crossover happening on a given layer
+    :returns: A tuple of two individuals.
+    This function uses the :func:`~random.random` function from the python base
+    :mod:`random` module.
+    """
+    size = min(len(ind1), len(ind2))
+    for i in range(size):  # iterate through list of layer weights
+        if random.random() < layer_prob:  # select this layer
+            # Note: ind[i] is a list of ndarrays
+            ind1[i], ind2[i] = ind2[i], ind1[i]
+
+    return ind1, ind2
 
 
 def setup_creator():
     creator.create("FitnessMax", base.Fitness, weights=(1.0,))
     creator.create("Individual", list, fitness=creator.FitnessMax)
+
+
+def build_individual():
+    ind = creator.Individual()
+    for x in range(5):
+        ind.append([random.random() for x in range(5)])
+    return ind
+
+
+def build_individual1():
+    model = ChessNetwork.build_model()
+
+    weights = []
+    for layer in model.layers[1:]:
+        weights.append(layer.get_weights())
+
+    ind = creator.Individual()
+    ind.append(weights)
+
+    return ind
+
+
+def evaluate(individual):
+    total = 0.0
+    for x in range(len(individual)):
+        total += sum(individual[x])
+    return total,
 
 
 class EvolutionWorker:
@@ -31,9 +99,9 @@ class EvolutionWorker:
         self.setup_log()
 
     def setup_toolbox(self):
-        self.toolbox.register("attribute", random.random)
-        self.toolbox.register("individual", tools.initRepeat, creator.Individual,
-                              self.toolbox.attribute, 10)
+        # self.toolbox.register("attribute", build_individual)
+        # self.toolbox.register("individual", tools.initRepeat, creator.Individual, self.toolbox.attribute, n=4)
+        self.toolbox.register("individual", build_individual1)
         self.toolbox.register("population", tools.initRepeat, list, self.toolbox.individual)
         self.toolbox.register("evaluate", evaluate)
         self.toolbox.register("mate", tools.cxTwoPoint)
@@ -83,8 +151,9 @@ class EvolutionWorker:
 
             for mutant in offspring:
                 if random.random() < MUT:
-                    self.toolbox.mutate(mutant)
-                    del mutant.fitness.values
+                    self.mutate_wrapper(mutant)
+                    # self.toolbox.mutate(mutant)
+                    # del mutant.fitness.values
 
             # Evaluate the individuals with an invalid fitness
             invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
@@ -102,4 +171,10 @@ class EvolutionWorker:
 
         best_ind = tools.selBest(self.pop, 1)[0]
         print("Best individual is %s, %s" % (best_ind, best_ind.fitness.values))
+        print(str((self.pop[0])[0]))
         self.plot()
+
+    def mutate_wrapper(self, mutant):
+        for x in range(len(mutant)):
+            self.toolbox.mutate(mutant[x])
+            del mutant.fitness.values

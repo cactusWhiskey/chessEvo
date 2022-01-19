@@ -6,7 +6,7 @@ import ChessWorker
 
 
 class RayManager:
-    def __init__(self, numActors):
+    def __init__(self, numActors:int):
         self.tasksInProgress = 0
         self.tasksLeft = 0
         self.ids = []
