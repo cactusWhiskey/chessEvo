@@ -5,6 +5,7 @@ from deap import base
 from deap import creator
 from deap import tools
 import ChessNetwork
+import ChessWorker
 
 CX, MUT = 0.5, 0.2
 POP_SIZE, T_SIZE, NGEN = 100, 3, 50
@@ -67,6 +68,16 @@ def setup_creator():
     creator.create("FitnessMax", base.Fitness, weights=(1.0,))
     creator.create("Individual", list, fitness=creator.FitnessMax)
 
+    #  Individual Structure:
+    #       fitness = float
+    #       list[
+    #               0 = list[ndarrays] <- layers
+    #                      0 = ndarray (matrix of weights)
+    #                      1 = ndarray (typically a bias matrix)
+    #                       ...
+    #               1 = list[ndarrays]
+    #               ...
+
 
 def build_individual():
     ind = creator.Individual()
@@ -82,10 +93,16 @@ def build_individual1():
         ind.append(layer.get_weights())
     return ind
 
-def evaluate2(individual):
+
+def evaluate(actor: ChessWorker.ChessWorker, individual):
+    actor.reset_board.remote()
+    network = ChessNetwork.ChessNetwork()
+    network.build_from_genome(individual)
+    return actor.play.remote(network)
 
 
-def evaluate(individual):
+def evaluate_testing(individual):
+    # test eval funtion that just returns sum of the network weights
     total = 0.0
     for i in range(len(individual)):
         for j in range(len(individual[i])):
