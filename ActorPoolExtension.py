@@ -1,8 +1,6 @@
 import ray
-from ray.util.annotations import PublicAPI
 
 
-@PublicAPI(stability="beta")
 class ActorPool:
     """Utility class to operate on a fixed pool of actors.
 
