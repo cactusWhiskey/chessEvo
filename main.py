@@ -5,7 +5,7 @@ import Evolution
 from ActorPoolExtension import ActorPool
 import ChessWorker
 
-NUM_ACTORS = 16
+NUM_ACTORS = 4
 actors = []
 ray.init()
 

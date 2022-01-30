@@ -50,11 +50,11 @@ class ChessWorker:
             povScore = result.info['score']
             scores.append(self.processScore(povScore))
             print(result.move)
-            result = self.engine.play(self.board, chess.engine.Limit(time=0.1), info=chess.engine.INFO_SCORE)
-            self.board.push(result.move)
-            print(result.move)
-            moveCount += 1
-            print(str(moveCount))
+            # result = self.engine.play(self.board, chess.engine.Limit(time=0.1), info=chess.engine.INFO_SCORE)
+            # self.board.push(result.move)
+            # print(result.move)
+            # moveCount += 1
+            # print(str(moveCount))
         return self.eval(moveCount, False, scores), str(os.getpid()) + ": " + str(self.board.outcome().result())
 
     def play(self, individual):

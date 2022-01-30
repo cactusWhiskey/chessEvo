@@ -13,7 +13,7 @@ import Crossover
 
 # constants
 CX, MUT = 0.5, 0.2
-POP_SIZE, T_SIZE, NGEN = 500, 3, 300
+POP_SIZE, T_SIZE, NGEN = 50, 3, 300
 MUT_LAYER_PROB = 0.2
 CX_LAYER_PROB = 0.2
 
@@ -172,18 +172,27 @@ class EvolutionWorker:
         #self.plot()
 
     def mutate_wrapper(self, mutant):
-        for i in range(len(mutant)): # iterate through layers
-            if random.random() < MUT_LAYER_PROB:
-                # mutate this layer's matrices
-                # mutant[i] is a list of ndarrays
-                num_matrices = len(mutant[i])
-                for j in range(num_matrices):
-                    matrix = mutant[i][j]  # type: numpy.ndarray
-                    shape = matrix.shape
-                    matrix = matrix.flatten()
-                    self.toolbox.mutate(matrix)
-                    matrix = matrix.reshape(shape)
-                    mutant[i][j] = matrix
+        i = random.randint(0, len(mutant)-1)
+        num_matrices = len(mutant[i])
+        for j in range(num_matrices):
+            matrix = mutant[i][j]  # type: numpy.ndarray
+            shape = matrix.shape
+            matrix = matrix.flatten()
+            self.toolbox.mutate(matrix)
+            matrix = matrix.reshape(shape)
+            mutant[i][j] = matrix
+        # for i in range(len(mutant)): # iterate through layers
+        #     if random.random() < MUT_LAYER_PROB:
+        #         # mutate this layer's matrices
+        #         # mutant[i] is a list of ndarrays
+        #         num_matrices = len(mutant[i])
+        #         for j in range(num_matrices):
+        #             matrix = mutant[i][j]  # type: numpy.ndarray
+        #             shape = matrix.shape
+        #             matrix = matrix.flatten()
+        #             self.toolbox.mutate(matrix)
+        #             matrix = matrix.reshape(shape)
+        #             mutant[i][j] = matrix
 
             del mutant.fitness.values
         return mutant
