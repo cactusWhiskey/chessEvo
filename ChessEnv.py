@@ -1,10 +1,11 @@
-import numpy as np
 from enum import Enum
+import numpy as np
 from tf_agents.environments import py_environment
 from tf_agents.specs import array_spec
+from tf_agents.trajectories import time_step as ts
 import chess
 import chess.engine
-from tf_agents.trajectories import time_step as ts
+import random
 
 MATE_SCORE = 200.0  # just some value to stand in for mate
 ILLEGAL_MOVE_PENALTY = -100.0
@@ -19,6 +20,8 @@ class Color(Enum):
 class ChessEnv(py_environment.PyEnvironment):
 
     def __init__(self):
+        super().__init__()
+
         self._action_spec = array_spec.BoundedArraySpec(
             shape=(), dtype=np.int32, minimum=0, maximum=4095, name='action')
 
@@ -37,6 +40,7 @@ class ChessEnv(py_environment.PyEnvironment):
         self._scores = []
         self.outcome = None
         self._move_count = 0
+        self.print = False
 
     def action_spec(self):
         return self._action_spec
@@ -62,6 +66,12 @@ class ChessEnv(py_environment.PyEnvironment):
         self._scores.append(self._process_score(povScore))
         self._board.push(result.move)
 
+        if self.print is True:
+            print(self._board)
+
+    def close(self) -> None:
+        self.close_engine()
+
     def close_engine(self):
         if self.engine is not None:
             self.engine.quit()
@@ -72,6 +82,24 @@ class ChessEnv(py_environment.PyEnvironment):
             self._board.push(result.move)
             print(result.move)
         print(self._board.result())
+
+    def self_test(self, num_runs=1, random_color=False):
+        if random_color is True:
+            color = random.randint(0, 1)
+            if color != self._color:
+                self.change_color()
+
+        for i in range(num_runs):
+            self.reset()
+            print_counter = 0
+            while not self._board.is_game_over():
+                result = self.engine.play(self._board, chess.engine.Limit(time=0.1))
+                print(result.move)
+                self.step(self.move_to_action(result.move))
+                print_counter += 1
+                if print_counter % 5 == 0:
+                    print(self._board)
+            print(self._board.outcome().result())
 
     def _reset(self):
         # does not change engine color
@@ -100,6 +128,7 @@ class ChessEnv(py_environment.PyEnvironment):
             self._episode_ended = True
             self._scores.append(0.0)
         else:  # is legal move
+            print("legal")
             self._board.push(self._move)
             self._move_count += 1
             if self._board.is_game_over():
@@ -121,6 +150,7 @@ class ChessEnv(py_environment.PyEnvironment):
 
     def _build_observation(self):
         self._observation = []
+        # loop through every square and check what piece is there
         for i in range(64):
             piece = self._board.piece_at(i)
             if piece is None:
@@ -130,12 +160,30 @@ class ChessEnv(py_environment.PyEnvironment):
                 if not piece.color:
                     p = p * -1.0
             self._observation.append(p)
+
+        # check castling rights
+        if bool(self._board.castling_rights & chess.BB_A1):
+            self._observation[chess.A1] += 0.5
+        if bool(self._board.castling_rights & chess.BB_H1):
+            self._observation[chess.H1] += 0.5
+        if bool(self._board.castling_rights & chess.BB_A8):
+            self._observation[chess.A8] += 0.5
+        if bool(self._board.castling_rights & chess.BB_H8):
+            self._observation[chess.H8] += 0.5
+
+        #  check EP
+        if self._board.has_legal_en_passant():
+            self._observation[self._board.ep_square] += 0.5
+
         self._observation = np.array(self._observation).reshape(8, 8)
 
     def _build_move(self, action):
         origin_square = int(action / 64)
         destination_square = action % 64
-        moveStr = chess.SQUARE_NAMES[origin_square] + chess.SQUARE_NAMES[destination_square]
+        if origin_square == destination_square:
+            moveStr = "0000"  # null move
+        else:
+            moveStr = chess.SQUARE_NAMES[origin_square] + chess.SQUARE_NAMES[destination_square]
         move = chess.Move.from_uci(moveStr)
         self._move = move
         self._legal = self._board.is_legal(move)
@@ -169,9 +217,13 @@ class ChessEnv(py_environment.PyEnvironment):
 
         return score
 
+    @staticmethod
+    def text_to_action(origin: str, destination: str) -> int:
+        # accepts strings of the form 'e2', 'h5', etc
+        # separate string for origin and destination of move
+        # e.g ('e2', 'e4')
+        return chess.SQUARE_NAMES.index(origin) * 64 + chess.SQUARE_NAMES.index(destination)
 
-def text_to_action(origin: str, destination: str) -> int:
-    # accepts strings of the form 'e2', 'h5', etc
-    # separate string for origin and destination of move
-    # e.g ('e2', 'e4')
-    return chess.SQUARE_NAMES.index(origin) * 64 + chess.SQUARE_NAMES.index(destination)
+    @staticmethod
+    def move_to_action(move: chess.Move):
+        return move.from_square * 64 + move.to_square
