@@ -12,6 +12,19 @@ ILLEGAL_MOVE_PENALTY = -100.0
 WIN_BONUS = 50.0
 
 
+# Credit Mateen Ulhaq
+#  https://chess.stackexchange.com/questions/29294/quickly-converting-board-to-bitboard-representation-using-python-chess-library
+def bitboards_to_array(bb: np.ndarray) -> np.ndarray:
+    # returns an array of (8,8) arrays. The (8,8) arrays have index [0][0] = Square A1,
+    # index [7][7] = H8
+    bb = np.asarray(bb, dtype=np.uint64)[:, np.newaxis]
+    s = 8 * np.arange(0, 8, 1, dtype=np.uint64)
+    b = (bb >> s).astype(np.uint8)
+    b = np.unpackbits(b, bitorder="little")
+    b = b.reshape(-1, 8, 8)
+    return np.transpose(b, (1, 2, 0))
+
+
 class Color(Enum):
     WHITE = 0
     BLACK = 1
@@ -26,7 +39,7 @@ class ChessEnv(py_environment.PyEnvironment):
             shape=(), dtype=np.int32, minimum=0, maximum=4095, name='action')
 
         self._observation_spec = array_spec.BoundedArraySpec(
-            shape=(8, 8), dtype=np.float64, minimum=-6.0, maximum=6.0, name='observation')
+            shape=(8, 8, 13), dtype=np.float64, minimum=-6.0, maximum=6.0, name='observation')
 
         self._board = chess.Board()
         self._color = Color.BLACK
@@ -41,6 +54,7 @@ class ChessEnv(py_environment.PyEnvironment):
         self.outcome = None
         self._move_count = 0
         self.print = False
+        self.total_reward = 0
 
     def action_spec(self):
         return self._action_spec
@@ -111,6 +125,7 @@ class ChessEnv(py_environment.PyEnvironment):
         self._move_count = 0
         self._move = None
         self._legal = None
+        self.total_reward = 0
         return ts.restart(self._observation)
 
     def _step(self, action):
@@ -129,6 +144,7 @@ class ChessEnv(py_environment.PyEnvironment):
             self._scores.append(0.0)
         else:  # is legal move
             print("legal")
+            self.total_reward += 1
             self._board.push(self._move)
             self._move_count += 1
             if self._board.is_game_over():
@@ -141,7 +157,8 @@ class ChessEnv(py_environment.PyEnvironment):
                     self._episode_ended = True
                     self.outcome = self._board.outcome()
 
-        reward = self._calculate_reward()
+        # reward = self._calculate_reward()
+        reward = self.total_reward
         self._build_observation()
         if self._episode_ended:
             return ts.termination(self._observation, reward)
@@ -150,32 +167,37 @@ class ChessEnv(py_environment.PyEnvironment):
 
     def _build_observation(self):
         self._observation = []
-        # loop through every square and check what piece is there
-        for i in range(64):
-            piece = self._board.piece_at(i)
-            if piece is None:
-                p = 0.0
-            else:
-                p = float(piece.piece_type)
-                if not piece.color:
-                    p = p * -1.0
-            self._observation.append(p)
 
-        # check castling rights
-        if bool(self._board.castling_rights & chess.BB_A1):
-            self._observation[chess.A1] += 0.5
-        if bool(self._board.castling_rights & chess.BB_H1):
-            self._observation[chess.H1] += 0.5
-        if bool(self._board.castling_rights & chess.BB_A8):
-            self._observation[chess.A8] += 0.5
-        if bool(self._board.castling_rights & chess.BB_H8):
-            self._observation[chess.H8] += 0.5
+        # Black side is most significant bits
+        bitboards = [
+            int(self._board.pieces(chess.PAWN, chess.BLACK)),
+            int(self._board.pieces(chess.KNIGHT, chess.BLACK)),
+            int(self._board.pieces(chess.BISHOP, chess.BLACK)),
+            int(self._board.pieces(chess.ROOK, chess.BLACK)),
+            int(self._board.pieces(chess.QUEEN, chess.BLACK)),
+            int(self._board.pieces(chess.KING, chess.BLACK)),
 
-        #  check EP
-        if self._board.has_legal_en_passant():
-            self._observation[self._board.ep_square] += 0.5
+            int(self._board.pieces(chess.PAWN, chess.WHITE)),
+            int(self._board.pieces(chess.KNIGHT, chess.WHITE)),
+            int(self._board.pieces(chess.BISHOP, chess.WHITE)),
+            int(self._board.pieces(chess.ROOK, chess.WHITE)),
+            int(self._board.pieces(chess.QUEEN, chess.WHITE)),
+            int(self._board.pieces(chess.KING, chess.WHITE)),
 
-        self._observation = np.array(self._observation).reshape(8, 8)
+            self._board.castling_rights
+        ]
+
+        if self._board.turn:  # White to move
+            bitboards[-1] = bitboards[
+                                -1] | 4  # flip a bit on the white side of the castling rights board to indicate turn order
+
+        if self._board.ep_square is not None:
+            ep_bb = 2 ** self._board.ep_square
+            bitboards[-1] = bitboards[-1] | ep_bb  # add the ep square to the castling rights bb
+
+        bitboards = np.array(bitboards, dtype=np.uint64)
+
+        self._observation = bitboards_to_array(bitboards)  # shape (8,8,13)
 
     def _build_move(self, action):
         origin_square = int(action / 64)

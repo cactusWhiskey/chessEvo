@@ -1,43 +1,13 @@
 import ray
+from ray.util import ActorPool
 
 
-class ActorPool:
-    """Utility class to operate on a fixed pool of actors.
-
-    Arguments:
-        actors (list): List of Ray actor handles to use in this pool.
-
-    Examples:
-        >>> a1, a2 = Actor.remote(), Actor.remote()
-        >>> pool = ActorPool([a1, a2])
-        >>> print(list(pool.map(lambda a, v: a.double.remote(v),\
-        ...                     [1, 2, 3, 4])))
-        [2, 4, 6, 8]
-    """
-
-    def __init__(self, actors):
-        # actors to be used
-        self._idle_actors = list(actors)
-
-        # get actor from future
-        self._future_to_actor = {}
-
-        # get future from index
-        self._index_to_future = {}
-
-        # next task to do
-        self._next_task_index = 0
-
-        # next task to return
-        self._next_return_index = 0
-
-        # next work depending when actors free
-        self._pending_submits = []
+class ActorPoolExtension(ActorPool):
 
     def map_ordered_return_all(self, fn, values) -> list:
         """Apply the given function in parallel over the actors and values.
 
-        This returns an ordered iterator.
+        This returns a list.
 
         Arguments:
             fn (func): Function that takes (actor, value) as argument and
@@ -47,7 +17,7 @@ class ActorPool:
                 applied to.
 
         Returns:
-            Iterator over results from applying fn to the actors and values.
+            List of results from applying fn to the actors and values.
 
 
         """
@@ -60,62 +30,6 @@ class ActorPool:
             result, j = self.get_next_unordered_with_index()
             results[j] = result
         return results
-
-    def map(self, fn, values):
-        """Apply the given function in parallel over the actors and values.
-
-        This returns an ordered iterator that will return results of the map
-        as they finish. Note that you must iterate over the iterator to force
-        the computation to finish.
-
-        Arguments:
-            fn (func): Function that takes (actor, value) as argument and
-                returns an ObjectRef computing the result over the value. The
-                actor will be considered busy until the ObjectRef completes.
-            values (list): List of values that fn(actor, value) should be
-                applied to.
-
-        Returns:
-            Iterator over results from applying fn to the actors and values.
-
-        Examples:
-            >>> pool = ActorPool(...)
-            >>> print(list(pool.map(lambda a, v: a.double.remote(v),\
-            ...                     [1, 2, 3, 4])))
-            [2, 4, 6, 8]
-        """
-        for v in values:
-            self.submit(fn, v)
-        while self.has_next():
-            yield self.get_next()
-
-    def map_unordered(self, fn, values):
-        """Similar to map(), but returning an unordered iterator.
-
-        This returns an unordered iterator that will return results of the map
-        as they finish. This can be more efficient that map() if some results
-        take longer to compute than others.
-
-        Arguments:
-            fn (func): Function that takes (actor, value) as argument and
-                returns an ObjectRef computing the result over the value. The
-                actor will be considered busy until the ObjectRef completes.
-            values (list): List of values that fn(actor, value) should be
-                applied to.
-
-        Returns:
-            Iterator over results from applying fn to the actors and values.
-
-        Examples:
-            >>> pool = ActorPool(...)
-            >>> print(list(pool.map_unordered(lambda a, v: a.double.remote(v),\
-            ...                               [1, 2, 3, 4])))
-            [6, 2, 4, 8]
-        """
-        for v in values:
-            self.submit(fn, v)
-        while self.has_next():
-            yield self.get_next_unordered()
 
     def submit(self, fn, value, original_index=None):
         """Schedule a single task to run in the pool.
@@ -147,24 +61,6 @@ class ActorPool:
             self._next_task_index += 1
         else:
             self._pending_submits.append((fn, value, original_index))
-
-    def has_next(self):
-        """Returns whether there are any pending results to return.
-
-        Returns:
-            True if there are any pending results not yet returned.
-
-        Examples:
-            >>> pool = ActorPool(...)
-            >>> pool.submit(lambda a, v: a.double.remote(v), 1)
-            >>> print(pool.has_next())
-            True
-            >>> print(pool.get_next())
-            2
-            >>> print(pool.has_next())
-            False
-        """
-        return bool(self._future_to_actor)
 
     def get_next(self, timeout=None):
         """Returns the next pending result in order.
@@ -274,68 +170,3 @@ class ActorPool:
         self._next_return_index = max(self._next_return_index, i + 1)
         return ray.get(future), original_index
 
-    def _return_actor(self, actor):
-        self._idle_actors.append(actor)
-        if self._pending_submits:
-            self.submit(*self._pending_submits.pop(0))
-
-    def has_free(self):
-        """Returns whether there are any idle actors available.
-
-        Returns:
-            True if there are any idle actors and no pending submits.
-
-        Examples:
-            >>> a1 = Actor.remote()
-            >>> pool = ActorPool(a1)
-            >>> pool.submit(lambda a, v: a.double.remote(v), 1)
-            >>> print(pool.has_free())
-            False
-            >>> print(pool.get_next())
-            2
-            >>> print(pool.has_free())
-            True
-        """
-        return len(self._idle_actors) > 0 and len(self._pending_submits) == 0
-
-    def pop_idle(self):
-        """Removes an idle actor from the pool.
-
-        Returns:
-            An idle actor if one is available.
-            None if no actor was free to be removed.
-
-        Examples:
-            >>> a1 = Actor.remote()
-            >>> pool = ActorPool([a1])
-            >>> pool.submit(lambda a, v: a.double.remote(v), 1)
-            >>> print(pool.pop_idle())
-            None
-            >>> print(pool.get_next())
-            2
-            >>> print(pool.pop_idle())
-            <ptr to a1>
-        """
-        if self.has_free():
-            return self._idle_actors.pop()
-        return None
-
-    def push(self, actor):
-        """Pushes a new actor into the current list of idle actors.
-
-        Examples:
-            >>> a1, b1 = Actor.remote(), Actor.remote()
-            >>> pool = ActorPool([a1])
-            >>> pool.submit(lambda a, v: a.double.remote(v), 1)
-            >>> print(pool.get_next())
-            2
-            >>> pool2 = ActorPool([b1])
-            >>> pool2.push(pool.pop_idle())
-        """
-        busy_actors = []
-        if self._future_to_actor.values():
-            _, busy_actors = zip(*self._future_to_actor.values())
-        if actor in self._idle_actors or actor in busy_actors:
-            raise ValueError("Actor already belongs to current ActorPool")
-        else:
-            self._idle_actors.append(actor)

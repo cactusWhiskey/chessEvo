@@ -1,9 +1,7 @@
-import os
 import ray
-#os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-import Evolution
+import ChessAgentRemote
+import EvolutionRL_Remote
 from ActorPoolExtension import ActorPoolExtension
-import ChessWorker
 
 NUM_ACTORS = 4
 actors = []
@@ -11,12 +9,12 @@ ray.init()
 
 if __name__ == "__main__":
     for x in range(NUM_ACTORS):
-        actor = ChessWorker.ChessWorker.remote()
+        actor = ChessAgentRemote.ChessAgentRemote.remote()
         actors.append(actor)
 
     pool = ActorPoolExtension(actors)
 
-    evo_worker = Evolution.EvolutionWorker()
+    evo_worker = EvolutionRL_Remote.EvolutionWorker()
 
     evo_worker.evolve(pool)
 

@@ -8,7 +8,7 @@ from deap import creator
 from deap import tools
 import ChessNetwork
 import ChessWorker
-from ActorPoolExtension import ActorPool
+from ActorPoolExtension import ActorPoolExtension
 import Crossover
 
 # constants
@@ -119,7 +119,7 @@ class EvolutionWorker:
     #     ax.set_ylabel("Fitness", color="b")
     #     plt.show()
 
-    def evolve(self, pool: ActorPool):
+    def evolve(self, pool: ActorPoolExtension):
         # Evaluate the entire population
         fitnesses = pool.map_ordered_return_all(self.toolbox.evaluate, self.pop)
         for ind, fit in zip(self.pop, fitnesses):
@@ -150,7 +150,7 @@ class EvolutionWorker:
             self.times.append(time.time())
             # Evaluate the individuals with an invalid fitness
             invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
-            fitnesses = pool.map_ordered_return_all(self.toolbox.evaluate, self.pop)
+            fitnesses = pool.map_ordered_return_all(self.toolbox.evaluate, invalid_ind)
             for ind, fit in zip(invalid_ind, fitnesses):
                 ind.fitness.values = fit
             self.times.append(time.time())

@@ -4,22 +4,12 @@ import numpy
 from deap import base
 from deap import creator
 from deap import tools
-import ChessAgent
-import ChessEnv
+import ChessAgentRemote
+from ActorPoolExtension import ActorPoolExtension
 
-# constants
 CX, MUT = 0.5, 0.2
-POP_SIZE, T_SIZE, NGEN = 25, 3, 30
-train_iterations = 10
-
-#  Hyperparm ranges
-hyperparams = [
-    [400, 800, 1600, 3200, 6400, 10000, 20000, 50000],  # replay buffer size
-    [16, 32, 64, 128],  # batch size
-    [2, 5, 10, 20, 40, 80, 100],  # update target every
-    [0.1, 0.01, 0.001, 0.0001],  # learning rate
-    [1]  # collect steps per iteration
-]
+POP_SIZE, T_SIZE, NGEN = 20, 3, 30
+train_iterations = 50
 
 
 def setup_creator():
@@ -27,26 +17,14 @@ def setup_creator():
     creator.create("Individual", list, fitness=creator.FitnessMax)
 
 
-def evaluate(individual: list, env: ChessEnv):
-    agent = ChessAgent.ChessAgent(env.time_step_spec(), env.action_spec())
-    i = 0
-    for key in agent.hyperparams:
-        agent.hyperparams[key] = hyperparams[i][individual[i]]
-        i += 1
-    # agent.hyperparams["replay_buffer_size"] = hyperparams[0][individual[0]]
-    # agent.hyperparams["train_batch_size"] = hyperparams[1][individual[1]]
-    # agent.hyperparams["update_target_every"] = hyperparams[2][individual[2]]
-    # agent.hyperparams["learning_rate"] = hyperparams[3][individual[3]]
-
-    collect_size = int(agent.hyperparams["replay_buffer_size"] * 0.6)
-    agent.collect_initial_data(env, max_episodes=collect_size)
-    agent.train(env, train_iterations)
-    return agent.train_metrics[2].result(),
+def evaluate(agent: ChessAgentRemote, individual: list):
+    param_choices = [x for x in individual]
+    return agent.eval_self.remote(train_iterations, param_choices)
 
 
 def build_individual() -> list:
     ind = creator.Individual()
-    for param in hyperparams:
+    for param in ChessAgentRemote.hyperparam_ranges:
         ind.append(random.randint(0, len(param) - 1))
     return ind
 
@@ -54,13 +32,12 @@ def build_individual() -> list:
 def mutate(individual: list, indpb):
     for index, attr in enumerate(individual):
         if random.random() < indpb:
-            individual[index] = random.randint(0, len(hyperparams[index]) - 1)
+            individual[index] = random.randint(0, len(ChessAgentRemote.hyperparam_ranges[index]) - 1)
     return individual
 
 
 class EvolutionWorker:
     def __init__(self):
-        self.env = ChessEnv.ChessEnv()
         self.record = None
         self.logbook = None
         self.stats = None
@@ -75,7 +52,7 @@ class EvolutionWorker:
     def setup_toolbox(self):
         self.toolbox.register("individual", build_individual)
         self.toolbox.register("population", tools.initRepeat, list, self.toolbox.individual)
-        self.toolbox.register("evaluate", evaluate, env=self.env)
+        self.toolbox.register("evaluate", evaluate)
         self.toolbox.register("mate", tools.cxOnePoint)
         self.toolbox.register("mutate", mutate, indpb=0.1)
         self.toolbox.register("select", tools.selTournament, tournsize=T_SIZE)
@@ -102,9 +79,9 @@ class EvolutionWorker:
     #     ax.set_ylabel("Fitness", color="b")
     #     plt.show()
 
-    def evolve(self):
+    def evolve(self, pool: ActorPoolExtension):
         # Evaluate the entire population
-        fitnesses = list(map(self.toolbox.evaluate, self.pop))
+        fitnesses = pool.map_ordered_return_all(self.toolbox.evaluate, self.pop)
         for ind, fit in zip(self.pop, fitnesses):
             ind.fitness.values = fit
 
@@ -126,7 +103,7 @@ class EvolutionWorker:
                     del mutant.fitness.values
             # Evaluate the individuals with an invalid fitness
             invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
-            fitnesses = list(map(self.toolbox.evaluate, self.pop))
+            fitnesses = pool.map_ordered_return_all(self.toolbox.evaluate, invalid_ind)
             for ind, fit in zip(invalid_ind, fitnesses):
                 ind.fitness.values = fit
             # The population is entirely replaced by the offspring
@@ -134,13 +111,16 @@ class EvolutionWorker:
             self.record = self.stats.compile(self.pop)
             self.logbook.record(gen=g, **self.record)
             print(self.logbook.stream)
+
+            for actor in pool._idle_actors:
+                actor.reset_agent.remote()
+
         print("-- End of (successful) evolution --")
 
         best_ind = tools.selBest(self.pop, 1)[0]
         print("Best individual is %s" % best_ind.fitness.values)
-        print("Replay Buffer Size: " + str(hyperparams[0][best_ind[0]]))
-        print("Batch Size: " + str(hyperparams[1][best_ind[1]]))
-        print("Update Target Every: " + str(hyperparams[2][best_ind[2]]))
-        print("Learning Rate: " + str(hyperparams[3][best_ind[3]]))
-        self.env.close()
+        print("Replay Buffer Size: " + str(ChessAgentRemote.hyperparam_ranges[0][best_ind[0]]))
+        print("Batch Size: " + str(ChessAgentRemote.hyperparam_ranges[1][best_ind[1]]))
+        print("Update Target Every: " + str(ChessAgentRemote.hyperparam_ranges[2][best_ind[2]]))
+        print("Learning Rate: " + str(ChessAgentRemote.hyperparam_ranges[3][best_ind[3]]))
         # self.plot()

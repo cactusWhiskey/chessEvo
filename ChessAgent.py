@@ -2,6 +2,7 @@ import random
 from collections import deque
 import numpy as np
 import tensorflow as tf
+from tf_agents.metrics import py_metrics
 from tf_agents.policies import random_py_policy
 from tf_agents.trajectories import time_step as ts
 from tf_agents.typing import types
@@ -40,6 +41,14 @@ class ChessAgent:
         # TimeSteps
         self.current_time_step = None
 
+        # Metrics
+        self.train_metrics = [
+            py_metrics.NumberOfEpisodes(),
+            py_metrics.EnvironmentSteps(),
+            py_metrics.AverageReturnMetric(),
+            py_metrics.AverageEpisodeLengthMetric(),
+        ]
+
     def collect_initial_data(self, env: ChessEnv, max_steps=None, max_episodes=None):
         random_policy = random_py_policy.RandomPyPolicy(self.time_step_spec, self.action_spec)
         driver = ModifiedPyDriver.ModifiedPyDriver(env, random_policy, observers=None,
@@ -48,14 +57,14 @@ class ChessAgent:
         ts = env.reset()
         driver.run(ts)
 
-    def train(self, env: ChessEnv, iterations, collect_steps_per_iter, metrics=None, max_episodes=None,
-              play_test_every=None):
+    def train(self, env: ChessEnv, iterations, max_episodes=None, play_test_every=None):
         play_test_counter = 0
 
         self.current_time_step = env.reset()
-        driver = ModifiedPyDriver.ModifiedPyDriver(env, self.collect_policy, observers=metrics,
+        driver = ModifiedPyDriver.ModifiedPyDriver(env, self.collect_policy, observers=self.train_metrics,
                                                    transition_observers=[self.replay_buffer.append],
-                                                   max_steps=collect_steps_per_iter, max_episodes=max_episodes)
+                                                   max_steps=self.hyperparams["collect_steps_per_iter"],
+                                                   max_episodes=max_episodes)
 
         for i in range(iterations):
             self.current_time_step, _ = driver.run(self.current_time_step)
@@ -80,7 +89,7 @@ class ChessAgent:
                 Y.append(current_Qs[index])  # list of outputs for this current state
 
             self.model.fit(np.array(X), np.array(Y), batch_size=self.hyperparams["train_batch_size"],
-                           shuffle=False, verbose=0)
+                           shuffle=False, verbose=1)
 
             self.target_update_counter += 1
             play_test_counter += 1
@@ -95,14 +104,17 @@ class ChessAgent:
 
     def build_model(self):
         model = tf.keras.Sequential([
-            tf.keras.layers.Flatten(input_shape=(8, 8)),
-            tf.keras.layers.Dense(128, activation='relu'),
-            tf.keras.layers.Dense(128, activation='relu'),
-            tf.keras.layers.Dense(128, activation='relu'),
-            tf.keras.layers.Dense(128, activation='relu'),
+            tf.keras.layers.Conv2D(512, (3, 3), activation='relu', padding='same', input_shape=(8, 8, 13)),
+            # tf.keras.layers.Conv2D(128, (3, 3), activation='relu', padding='same'),
+            tf.keras.layers.MaxPooling2D((2, 2)),
+            tf.keras.layers.Conv2D(512, (3, 3), activation='relu'),
+            tf.keras.layers.MaxPooling2D((2, 2)),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(512, activation='relu'),
+            tf.keras.layers.Dense(1024, activation='relu'),
             tf.keras.layers.Dense(4096)
-
         ])
+
         opt = tf.keras.optimizers.Adam(self.hyperparams["learning_rate"])
         model.compile(loss="mse", optimizer=opt, metrics=['accuracy'])
         return model
@@ -126,7 +138,29 @@ class ChessAgent:
         print("Updated Target Model")
 
     def _build_hyperparams(self):
-        self.hyperparams["replay_buffer_size"] = 10000
-        self.hyperparams["train_batch_size"] = 64
+        self.hyperparams["replay_buffer_size"] = 50000
+        self.hyperparams["train_batch_size"] = 32
         self.hyperparams["update_target_every"] = 20
         self.hyperparams["learning_rate"] = 1e-3
+        self.hyperparams["collect_steps_per_iter"] = 2
+
+    def reset_agent(self):
+        # Counters
+        self.target_update_counter = 0
+
+        # Models
+        self.model = self.build_model()
+        self.target_model = self.build_model()
+        self.target_model.set_weights(self.model.get_weights())
+
+        # Buffers
+        self.replay_buffer = deque(maxlen=self.hyperparams["replay_buffer_size"])
+
+        # Policies
+        self.eval_policy = ChessAgentPolicy.ChessAgentPolicy(self.time_step_spec, self.action_spec,
+                                                             self.model, epsilon_greedy=False)
+        self.collect_policy = ChessAgentPolicy.ChessAgentPolicy(self.time_step_spec, self.action_spec,
+                                                                self.model, epsilon_greedy=True)
+
+        # TimeSteps
+        self.current_time_step = None
