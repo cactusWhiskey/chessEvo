@@ -6,23 +6,11 @@ from tf_agents.trajectories import time_step as ts
 import chess
 import chess.engine
 import random
+import Util
 
 MATE_SCORE = 200.0  # just some value to stand in for mate
 ILLEGAL_MOVE_PENALTY = -100.0
 WIN_BONUS = 50.0
-
-
-# Credit Mateen Ulhaq
-#  https://chess.stackexchange.com/questions/29294/quickly-converting-board-to-bitboard-representation-using-python-chess-library
-def bitboards_to_array(bb: np.ndarray) -> np.ndarray:
-    # returns an array of (8,8) arrays. The (8,8) arrays have index [0][0] = Square A1,
-    # index [7][7] = H8
-    bb = np.asarray(bb, dtype=np.uint64)[:, np.newaxis]
-    s = 8 * np.arange(0, 8, 1, dtype=np.uint64)
-    b = (bb >> s).astype(np.uint8)
-    b = np.unpackbits(b, bitorder="little")
-    b = b.reshape(-1, 8, 8)
-    return np.transpose(b, (1, 2, 0))
 
 
 class Color(Enum):
@@ -167,37 +155,7 @@ class ChessEnv(py_environment.PyEnvironment):
 
     def _build_observation(self):
         self._observation = []
-
-        # Black side is most significant bits
-        bitboards = [
-            int(self._board.pieces(chess.PAWN, chess.BLACK)),
-            int(self._board.pieces(chess.KNIGHT, chess.BLACK)),
-            int(self._board.pieces(chess.BISHOP, chess.BLACK)),
-            int(self._board.pieces(chess.ROOK, chess.BLACK)),
-            int(self._board.pieces(chess.QUEEN, chess.BLACK)),
-            int(self._board.pieces(chess.KING, chess.BLACK)),
-
-            int(self._board.pieces(chess.PAWN, chess.WHITE)),
-            int(self._board.pieces(chess.KNIGHT, chess.WHITE)),
-            int(self._board.pieces(chess.BISHOP, chess.WHITE)),
-            int(self._board.pieces(chess.ROOK, chess.WHITE)),
-            int(self._board.pieces(chess.QUEEN, chess.WHITE)),
-            int(self._board.pieces(chess.KING, chess.WHITE)),
-
-            self._board.castling_rights
-        ]
-
-        if self._board.turn:  # White to move
-            bitboards[-1] = bitboards[
-                                -1] | 4  # flip a bit on the white side of the castling rights board to indicate turn order
-
-        if self._board.ep_square is not None:
-            ep_bb = 2 ** self._board.ep_square
-            bitboards[-1] = bitboards[-1] | ep_bb  # add the ep square to the castling rights bb
-
-        bitboards = np.array(bitboards, dtype=np.uint64)
-
-        self._observation = bitboards_to_array(bitboards)  # shape (8,8,13)
+        self._observation = Util.process_board(self._board)  # shape (8,8,13)
 
     def _build_move(self, action):
         origin_square = int(action / 64)
@@ -238,14 +196,3 @@ class ChessEnv(py_environment.PyEnvironment):
             score = (povScore.relative.cp * -1.0) / 100.0
 
         return score
-
-    @staticmethod
-    def text_to_action(origin: str, destination: str) -> int:
-        # accepts strings of the form 'e2', 'h5', etc
-        # separate string for origin and destination of move
-        # e.g ('e2', 'e4')
-        return chess.SQUARE_NAMES.index(origin) * 64 + chess.SQUARE_NAMES.index(destination)
-
-    @staticmethod
-    def move_to_action(move: chess.Move):
-        return move.from_square * 64 + move.to_square
