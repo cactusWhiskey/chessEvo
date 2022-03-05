@@ -1,10 +1,13 @@
 import os
+from collections import deque
 from os.path import exists
-
 import chess
 import chess.pgn
 import numpy as np
 import zarr
+from ML import ChessEnv
+
+history = deque(maxlen=7)
 
 
 # Credit Mateen Ulhaq
@@ -20,7 +23,12 @@ def bitboards_to_array(bb: np.ndarray) -> np.ndarray:
     return np.transpose(b, (1, 2, 0))
 
 
-def process_board(board: chess.Board) -> np.ndarray:
+def process_board(board: chess.Board, new_game: bool = False, single=True) -> np.ndarray:
+    if new_game:
+        history.clear()
+        for i in range(7):
+            history.append(np.zeros((8, 8, 13), dtype=np.uint8))
+
     # Black side is most significant bits
     bitboards = [
         int(board.pieces(chess.PAWN, chess.BLACK)),
@@ -49,8 +57,13 @@ def process_board(board: chess.Board) -> np.ndarray:
         bitboards[-1] = bitboards[-1] | ep_bb  # add the ep square to the castling rights bb
 
     bitboards = np.array(bitboards, dtype=np.uint64)
+    bitboards = bitboards_to_array(bitboards)  # shape (8,8,13)
 
-    return bitboards_to_array(bitboards)  # shape (8,8,13)
+    if single:
+        return bitboards  # shape (8,8,13)
+
+    history.append(bitboards)
+    return np.concatenate(history, axis=2)  # shape (8,8,91)
 
 
 def text_to_action(origin: str, destination: str) -> int:
@@ -61,41 +74,96 @@ def text_to_action(origin: str, destination: str) -> int:
 
 
 def move_to_action(move: chess.Move):
-    return move.from_square * 64 + move.to_square
-
-
-def write_data(observations: np.ndarray, moves: np.ndarray,
-               create: bool, obs_filepath: str, moves_filepath: str):
-    if create:
-        z_obs = zarr.array(observations, chunks=(10000, 8, 8, 13))
-        z_moves = zarr.array(moves, chunks=10000)
-        zarr.save(obs_filepath, z_obs)
-        zarr.save(moves_filepath, z_moves)
-        print("Z_obs shape: " + str(z_obs.shape))
-        print("Z_moves shape: " + str(z_moves.shape))
+    if move.promotion is None:
+        return move.from_square * 64 + move.to_square
     else:
-        z_obs = zarr.open(obs_filepath, mode="r+")
-        z_moves = zarr.open(moves_filepath, mode="r+")
-        z_obs.append(observations)
-        z_moves.append(moves)
-        print("Z_obs shape: " + str(z_obs.shape))
-        print("Z_moves shape: " + str(z_moves.shape))
+        promotion_index = move.promotion - 2  # 0 to 3
+        move_index = ChessEnv.promotion_moves.index(move.__str__()[0:4])  # 0 to 43
+
+        action = move_index * 4 + promotion_index  # 0 to 175
+        action += 4096  # now range is 4096 to 4271 inclusive
+
+        return action
 
 
-def process_files_to_zarr(MIN_ELO: int, pgn_dir: str, obs_filepath: str, moves_filepath: str, batch_size=30000):
-    total_games = 0
-    first_file = True
+def write_array(data: np.ndarray, create: bool,
+                filepath: str, chunks=None, verbose=True):
+    if create:
+        z_data = zarr.array(data, chunks=chunks)
+        zarr.save(filepath, z_data)
+    else:
+        z_data = zarr.open(filepath, mode="r+")
+        z_data.append(data)
+
+    if verbose:
+        # print("Saved to: " + filepath)
+        print("zarr_data shape: " + str(z_data.shape))
+
+
+# def write_data(observations: np.ndarray, moves: np.ndarray,
+#                create: bool, obs_filepath: str, moves_filepath: str):
+#     if create:
+#         z_obs = zarr.array(observations, chunks=(10000, 8, 8, 13))
+#         z_moves = zarr.array(moves, chunks=10000)
+#         zarr.save(obs_filepath, z_obs)
+#         zarr.save(moves_filepath, z_moves)
+#         print("Z_obs shape: " + str(z_obs.shape))
+#         print("Z_moves shape: " + str(z_moves.shape))
+#     else:
+#         z_obs = zarr.open(obs_filepath, mode="r+")
+#         z_moves = zarr.open(moves_filepath, mode="r+")
+#         z_obs.append(observations)
+#         z_moves.append(moves)
+#         print("Z_obs shape: " + str(z_obs.shape))
+#         print("Z_moves shape: " + str(z_moves.shape))
+
+
+def process_games(games: list, first_file: bool, inputs_filepath, labels_filepath,
+                  obs_chunks, singles=True):
+
+    observations = []
+    moves = []
+
+    for game in games:
+        board = game.board()
+        first_move = True
+
+        for move in game.mainline_moves():
+            if move.uci() == "0000":
+                break
+            observations.append(process_board(board, first_move, single=singles))
+            moves.append(move_to_action(move))
+            board.push(move)
+            first_move = False
+
+    observations = np.array(observations)
+    moves = np.array(moves)
+
+    if first_file:
+        write_array(observations, first_file, inputs_filepath, chunks=obs_chunks)
+        write_array(moves, first_file, labels_filepath, chunks=10000)
+        first_file = False
+    else:
+        write_array(observations, first_file, inputs_filepath, chunks=obs_chunks)
+        write_array(moves, first_file, labels_filepath, chunks=10000)
+
+    return first_file
+
+
+def process_files_to_zarr(MIN_ELO: int, pgn_dir: str, obs_filepath: str, moves_filepath: str,
+                          obs_chunks, batch_size=2_000, singles=True):
+
+    first = True
 
     if exists(obs_filepath) and exists(moves_filepath):
-        first_file = False
-        total_games += zarr.open(moves_filepath, mode="r").shape[0]
+        first = False
+        # total_games += zarr.open(moves_filepath, mode="r").shape[0]
 
     for filename in os.listdir(pgn_dir):
+        total_games = 0
 
-        observations = []
-        moves = []
         file_path = os.path.join(pgn_dir, filename)
-
+        print("Processing file: " + filename)
         pgn = open(file_path)
 
         offsets = []
@@ -121,93 +189,13 @@ def process_files_to_zarr(MIN_ELO: int, pgn_dir: str, obs_filepath: str, moves_f
             pgn.seek(offset)
             games.append(chess.pgn.read_game(pgn))
 
+            if len(games) >= batch_size:
+                print("Batch size reached")
+                total_games += len(games)
+                first = process_games(games, first, obs_filepath, moves_filepath, obs_chunks, singles=singles)
+                games = []
+
         total_games += len(games)
+        first = process_games(games, first, obs_filepath, moves_filepath, obs_chunks, singles=singles)
+
         print("Games that meet criteria: " + str(total_games))
-
-        game_count = 0
-        for game in games:
-
-            if game_count > batch_size:
-                observations = np.array(observations)
-                moves = np.array(moves)
-                if first_file:
-                    write_data(observations, moves, first_file, obs_filepath, moves_filepath)
-                    first_file = False
-                else:
-                    write_data(observations, moves, first_file, obs_filepath, moves_filepath)
-
-                observations = []
-                moves = []
-
-            board = game.board()
-            for move in game.mainline_moves():
-                # shape (_,8,8,13)
-                observations.append(process_board(board))
-                moves.append(move_to_action(move))
-                board.push(move)
-            game_count += 1
-
-        pgn.close()
-        observations = np.array(observations)
-        moves = np.array(moves)
-
-        if first_file:
-            write_data(observations, moves, first_file, obs_filepath, moves_filepath)
-            first_file = False
-        else:
-            write_data(observations, moves, first_file, obs_filepath, moves_filepath)
-
-
-def _split_zarrs(indices: list, z_obs: zarr.array, z_moves: zarr.array, num_to_write: int,
-                 obs_filepath: str, moves_filepath: str):
-
-    obs = []
-    mov = []
-    count = 0
-    first = True
-
-    for i in indices:
-        obs.append(z_obs[i])
-        mov.append(z_moves[i])
-        count += 1
-
-        if count > num_to_write:
-            count = 0
-            obs = np.array(obs)
-            mov = np.array(mov)
-
-            if first:
-                write_data(obs, mov, first, obs_filepath, moves_filepath)
-                first = False
-            else:
-                write_data(obs, mov, first, obs_filepath, moves_filepath)
-
-            obs = []
-            mov = []
-
-    obs = np.array(obs)
-    mov = np.array(mov)
-    write_data(obs, mov, first, obs_filepath, moves_filepath)
-
-
-def train_test_split(obs_filepath: str, moves_filepath: str, train_obs_filepath: str,
-                     train_moves_filepath: str, test_obs_filepath: str,
-                     test_moves_filepath: str, train_frac=0.8, num_to_write=1_000_000):
-
-    z_obs = zarr.open(obs_filepath, mode="r+")
-    z_moves = zarr.open(moves_filepath, mode="r+")
-
-    if len(z_obs) != len(z_moves):
-        raise ValueError
-
-    indices = np.arange(len(z_moves))
-    rng = np.random.default_rng()
-    rng.shuffle(indices)
-
-    num_train_examples = int(train_frac * len(z_moves))
-
-    train_indices = indices[0:num_train_examples]
-    test_indices = indices[num_train_examples:]
-
-    _split_zarrs(train_indices, z_obs, z_moves, num_to_write, train_obs_filepath, train_moves_filepath)
-    _split_zarrs(test_indices, z_obs, z_moves, num_to_write, test_obs_filepath, test_moves_filepath)
